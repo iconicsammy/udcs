@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "finish an ongoing walk",
+  "type": "object",
+  "properties": {
+    "endOn": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "endOn"
+  ],
+  "additionalProperties": false
+}

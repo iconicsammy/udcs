@@ -1,0 +1,257 @@
+service:
+  name: serverless-walk-tracker-app
+
+plugins:
+  - serverless-webpack
+  - serverless-iam-roles-per-function
+  - serverless-reqvalidator-plugin
+  - serverless-aws-documentation
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+
+  tracing:
+    lambda: true
+    apiGateway: true
+
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-2 '}
+
+  environment:
+    WALKSTRACKER_TABLE: WalksTracker-${self:provider.stage}
+    GALLERY_TABLE: Gallery-${self:provider.stage}
+    USER_ID_INDEX: UserIdIndex
+    WALK_ID_INDEX: WalkIdIndex
+    GALLERY_S3_BUCKET: walk-uploads-bucket-${self:provider.stage}
+    SIGNED_URL_EXPIRATION: 300
+    JWKS_URI: https://dev-e8sf6q9b.us.auth0.com/.well-known/jwks.json
+    TOKEN_ISSUER: https://dev-e8sf6q9b.us.auth0.com/
+    AUDIENCE: aw9Uz9Aaifme5mDa14UksXf6MtfQjQW6
+
+
+custom:
+  topicName: WalkTracker-${self:provider.stage}
+  documentation:
+    api:
+      info:
+        version: v1.0.0
+        title: Walk Trackers Api
+        description: Serverless application for managing walks a user does
+    models:
+      - name: AddNewWalkRequest
+        contentType: application/json
+        schema: ${file(request_models/new-walk-request.json)}
+      - name: FinishStartedWalkRequest
+        contentType: application/json
+        schema: ${file(request_models/finish-started-walk-request.json)}
+
+functions:
+
+  Auth:
+    name: auth-${self:provider.stage}
+    handler: src/lambda/auth/auth0Authorizer.handler
+    iamRoleStatements:
+      - Effect: "Allow"        
+        Action:
+          - ssm:GetParameter       
+        Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/auth0_client_id'
+
+
+  GetWalks:
+    handler: src/lambda/http/getWalks.handler
+    name: getWalks-${self:provider.stage}
+    events:
+      - http:
+          method: get
+          path: walks
+          cors: true
+          authorizer: Auth
+          documentation:
+            summary:  Get list of walks
+            description:  Get list of walks
+    iamRoleStatements:
+      - Effect: "Allow"        
+        Action:
+          - dynamodb:Query        
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.WALKSTRACKER_TABLE}
+      - Effect: "Allow"        
+        Action:
+          - dynamodb:Query        
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.WALKSTRACKER_TABLE}/index/${self:provider.environment.USER_ID_INDEX}
+
+
+  AddNewWalk:
+    handler: src/lambda/http/addNewWalk.handler
+    name: addNewWalk-${self:provider.stage}
+    events:
+      - http:
+          method: post
+          path: walks
+          cors: true
+          authorizer: Auth
+          reqValidatorName: RequestBodyOnlyValidator
+          documentation:
+            summary: Start a new walk exercise
+            description: Start a new walk exercise
+            requestModels:
+              'application/json': AddNewWalkRequest
+    iamRoleStatements:
+      - Effect: "Allow"        
+        Action:
+          - dynamodb:PutItem        
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.WALKSTRACKER_TABLE}
+
+
+  FinishWalk:
+    handler: src/lambda/http/finishWalk.handler
+    name: finishWalk-${self:provider.stage}
+    events:
+      - http:
+          method: patch
+          path: walks/{walkId}
+          cors: true
+          authorizer: Auth
+          reqValidatorName: RequestBodyParamValidator
+          documentation:
+            summary: Finish a started walk
+            description:  Finish a started walk
+            requestModels:
+              'application/json': FinishStartedWalkRequest
+    iamRoleStatements:
+      - Effect: "Allow"        
+        Action:
+          - dynamodb:UpdateItem        
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.WALKSTRACKER_TABLE}
+
+  DeleteWalk:
+    handler: src/lambda/http/deleteWalk.handler
+    name: deletewalk-${self:provider.stage}
+    events:
+      - http:
+          method: delete
+          path: walks/{walkId}
+          cors: true
+          authorizer: Auth
+    iamRoleStatements:
+      - Effect: "Allow"        
+        Action:
+          - dynamodb:DeleteItem        
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.WALKSTRACKER_TABLE}
+
+  GetImages:
+    handler: src/lambda/http/getWalks.handler
+    name: getImages-${self:provider.stage}
+    events:
+      - http:
+          method: get
+          path: images/{walkId}
+          cors: true
+          authorizer: Auth
+          documentation:
+            summary:  Get list of images user took during the walk
+            description:  Get list of images uer took during the walk
+    iamRoleStatements:
+      - Effect: "Allow"        
+        Action:
+          - dynamodb:Query        
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.GALLERY_TABLE}
+      - Effect: "Allow"        
+        Action:
+          - dynamodb:Query        
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.GALLERY_TABLE}/index/${self:provider.environment.WALK_ID_INDEX}
+
+
+resources:
+  Resources:
+
+    GatewayResponseDefault4XX:
+      Type: 'AWS::ApiGateway::GatewayResponse'
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
+        ResponseType: DEFAULT_4XX
+        RestApiId:
+          Ref: 'ApiGatewayRestApi'
+
+    WalksListTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: walkId
+            AttributeType: S
+          - AttributeName: userId
+            AttributeType: S
+
+        KeySchema:
+          - AttributeName: walkId
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        TableName: ${self:provider.environment.WALKSTRACKER_TABLE}
+        GlobalSecondaryIndexes:
+          - IndexName: ${self:provider.environment.USER_ID_INDEX}
+            KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
+    GalleryTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: imageId
+            AttributeType: S
+          - AttributeName: walkId
+            AttributeType: S
+
+        KeySchema:
+          - AttributeName: imageId
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        TableName: ${self:provider.environment.GALLERY_TABLE}
+        GlobalSecondaryIndexes:
+          - IndexName: ${self:provider.environment.WALK_ID_INDEX}
+            KeySchema:
+            - AttributeName: walkId
+              KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+    
+    RequestBodyOnlyValidator:
+      Type: AWS::ApiGateway::RequestValidator
+      Properties:
+        Name: 'request-body-validator'
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ValidateRequestBody: true
+        ValidateRequestParameters: false
+
+    RequestBodyParamValidator:
+      Type: AWS::ApiGateway::RequestValidator
+      Properties:
+        Name: 'request-body-param-validator'
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ValidateRequestBody: true
+        ValidateRequestParameters: true
+
+    UserWalkImagesBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.environment.GALLERY_S3_BUCKET}
+        CorsConfiguration:
+          CorsRules:
+            -
+              AllowedOrigins:
+                - '*'
+              AllowedHeaders:
+                - '*'
+              AllowedMethods:
+                - GET
+                - PUT
+                - POST
+                - DELETE
+                - HEAD
+              MaxAge: 3000

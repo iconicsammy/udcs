@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "add new walk exercise session",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string"
+    },
+    "startedOn": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "startedOn"
+  ],
+  "additionalProperties": false
+}
